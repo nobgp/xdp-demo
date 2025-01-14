@@ -15,7 +15,9 @@ import (
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go xdp bpf/xdp.c
 
 func main() {
-	// Remove rlimit
+	// Remove the memory locking limit to allow eBPF program loading.
+	// This is required because eBPF maps and programs need locked memory
+	// to ensure they can be accessed quickly from kernel space.
 	if err := rlimit.RemoveMemlock(); err != nil {
 		log.Fatalf("removing memlock rlimit: %v", err)
 	}
@@ -39,7 +41,10 @@ func main() {
 		log.Fatalf("getting interface: %v", err)
 	}
 
-	// Attach XDP program to interface
+	// Attach the compiled eBPF program to the specified network interface.
+	// link.AttachXDP sets up the XDP hook so that incoming packets
+	// will be processed by our eBPF program in the kernel before
+	// they reach the network stack, enabling high-performance packet processing.
 	l, err := link.AttachXDP(link.XDPOptions{
 		Program:   objs.XdpStats,
 		Interface: iface.Index,
@@ -59,8 +64,12 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
-	// Get map
+	// Initialize previous stats record for delta calculations
 	var prev xdpStatsRec
+	
+	// Main loop: periodically retrieve packet counters from the eBPF map (packet_stats)
+	// and compute packets per second (pps) and throughput in bits per second (bps).
+	// The statistics are calculated by comparing current values with previous measurements.
 	for {
 		select {
 		case <-ticker.C:
